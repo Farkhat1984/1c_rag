@@ -1,7 +1,6 @@
 import streamlit as st
 import os
 import sys
-import anthropic
 import hashlib
 
 # Добавляем корневую директорию проекта в путь поиска модулей
