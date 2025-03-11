@@ -1,28 +1,46 @@
 import streamlit as st
 import os
 import sys
-from openai import OpenAI
-import anthropic
 import hashlib
+
+# Обработка модулей, которые могут быть не установлены
+try:
+    from openai import OpenAI
+except ImportError:
+    OpenAI = None
+    st.warning("Модуль OpenAI не установлен. Некоторые функции могут быть недоступны.")
+
+try:
+    import anthropic
+except ImportError:
+    anthropic = None
+    st.warning("Модуль Anthropic не установлен. Некоторые функции могут быть недоступны.")
 
 # Добавляем корневую директорию проекта в путь поиска модулей
 sys.path.append(os.path.abspath(".."))
 
-# Импортируем компоненты из проекта
-from config.config import EMBEDDING_MODEL, DEEPSEEK_API_KEY
-# Добавим импорт ключа API для Anthropic
-from config.config import ANTHROPIC_API_KEY
-from retrieval.llm_service import call_llm_api
-from data_processing.text_processor import TextProcessor
-from data_processing.image_processor import ImageProcessor
-from data_processing.chunking import DocumentChunker
-from data_processing.summarization import TextSummarizer
-from database.sqlite_manager import SQLiteManager
-from database.qdrant_manager import QdrantManager
-from embbeding.embbedings import TextEmbedder
-from retrieval.retrieval import Retriever
-from retrieval.context_builder import ContextBuilder
-from utils.logger import setup_logger
+# Импортируем компоненты из проекта с обработкой исключений
+try:
+    from config.config import EMBEDDING_MODEL, DEEPSEEK_API_KEY, ANTHROPIC_API_KEY
+    from retrieval.llm_service import call_llm_api
+    from data_processing.text_processor import TextProcessor
+    from data_processing.image_processor import ImageProcessor
+    from data_processing.chunking import DocumentChunker
+    from data_processing.summarization import TextSummarizer
+    from database.sqlite_manager import SQLiteManager
+    from database.qdrant_manager import QdrantManager
+    from embbeding.embbedings import TextEmbedder
+    from retrieval.retrieval import Retriever
+    from retrieval.context_builder import ContextBuilder
+    from utils.logger import setup_logger
+except ImportError as e:
+    st.error(f"Ошибка при импорте компонентов: {str(e)}")
+    # Создаем простой логгер, если не можем импортировать setup_logger
+    import logging
+    logging.basicConfig(level=logging.INFO)
+    
+    def setup_logger(name):
+        return logging.getLogger(name)
 
 logger = setup_logger("streamlit_app")
 
@@ -44,42 +62,44 @@ if "current_user" not in st.session_state:
 # Пароли хранятся в виде хеша
 USERS = {
     "admin": {
-        "password_hash": hashlib.sha256("Ckdshfh231161!".encode()).hexdigest(),
+        "password_hash": hashlib.sha256("admin123".encode()).hexdigest(),
         "role": "admin",
         "full_name": "Администратор Системы"
     },
     "user1": {
-        "password_hash": hashlib.sha256("metalogicuser1!".encode()).hexdigest(),
+        "password_hash": hashlib.sha256("user123".encode()).hexdigest(),
         "role": "user",
         "full_name": "Иван Петров"
     },
     "user2": {
-        "password_hash": hashlib.sha256("metalogicuser2!".encode()).hexdigest(),
+        "password_hash": hashlib.sha256("user234".encode()).hexdigest(),
         "role": "user",
         "full_name": "Мария Сидорова"
     },
-
+    "manager": {
+        "password_hash": hashlib.sha256("manager123".encode()).hexdigest(),
+        "role": "manager",
+        "full_name": "Алексей Руководитель"
+    }
 }
-
 
 def verify_password(username, password):
     """Проверяет правильность пароля для указанного пользователя"""
     if username not in USERS:
         return False
-
+    
     password_hash = hashlib.sha256(password.encode()).hexdigest()
     return password_hash == USERS[username]["password_hash"]
-
 
 def login_user():
     """Страница входа в систему"""
     st.title("1С RAG-ассистент - Вход в систему")
-
+    
     with st.form("login_form"):
         username = st.text_input("Имя пользователя")
         password = st.text_input("Пароль", type="password")
         submit_button = st.form_submit_button("Войти")
-
+        
         if submit_button:
             if verify_password(username, password):
                 st.session_state.authenticated = True
@@ -92,8 +112,17 @@ def login_user():
                 st.rerun()
             else:
                 st.error("Неверное имя пользователя или пароль")
-
-
+    
+    # Показываем список доступных тестовых пользователей
+    with st.expander("Доступные тестовые аккаунты"):
+        st.markdown("""
+        | Имя пользователя | Пароль | Роль |
+        | ---------------- | ------ | ---- |
+        | admin | admin123 | Администратор |
+        | user1 | user123 | Пользователь |
+        | user2 | user234 | Пользователь |
+        | manager | manager123 | Менеджер |
+        """)
 
 # Initialize components
 @st.cache_resource(show_spinner=False)
@@ -103,12 +132,44 @@ def initialize_components():
         import logging
         logger = logging.getLogger("streamlit_app")
 
+        # Проверяем наличие всех необходимых классов перед инициализацией
+        required_classes = {
+            'TextProcessor': 'TextProcessor', 
+            'ImageProcessor': 'ImageProcessor',
+            'DocumentChunker': 'DocumentChunker',
+            'TextSummarizer': 'TextSummarizer',
+            'SQLiteManager': 'SQLiteManager',
+            'QdrantManager': 'QdrantManager',
+            'TextEmbedder': 'TextEmbedder',
+            'Retriever': 'Retriever',
+            'ContextBuilder': 'ContextBuilder'
+        }
+        
+        missing_classes = []
+        for class_name in required_classes:
+            if class_name not in globals():
+                missing_classes.append(class_name)
+        
+        if missing_classes:
+            logger.error(f"Отсутствуют необходимые классы: {', '.join(missing_classes)}")
+            st.error(f"Отсутствуют необходимые классы: {', '.join(missing_classes)}")
+            st.session_state.error_state = True
+            return None
+        
         text_processor = TextProcessor()
         image_processor = ImageProcessor()
         chunker = DocumentChunker()
         summarizer = TextSummarizer()
         sqlite_manager = SQLiteManager()
         qdrant_manager = QdrantManager()
+        
+        # Проверяем наличие EMBEDDING_MODEL перед использованием
+        if 'EMBEDDING_MODEL' not in globals():
+            logger.error("EMBEDDING_MODEL не определен")
+            st.error("EMBEDDING_MODEL не определен в конфигурации")
+            st.session_state.error_state = True
+            return None
+            
         text_embedder = TextEmbedder(EMBEDDING_MODEL)
         retriever = Retriever(qdrant_manager, sqlite_manager, text_embedder)
         context_builder = ContextBuilder()
@@ -136,6 +197,7 @@ def initialize_components():
         logger = logging.getLogger("streamlit_app")
         logger.error(f"Ошибка при инициализации компонентов: {str(e)}")
         st.session_state.error_state = True
+        st.error(f"Ошибка при инициализации компонентов: {str(e)}")
         return None
 
 
@@ -204,7 +266,7 @@ def handle_user_input(user_input):
 
     logger.info(f"Получен запрос от пользователя: {user_input}")
     st.session_state.chat_history.append({
-        "role": "user",
+        "role": "user", 
         "content": user_input,
         "user": st.session_state.current_user["username"]
     })
@@ -280,20 +342,20 @@ def handle_user_input(user_input):
 
 def chat_page():
     st.title("Чат с 1С-ассистентом")
-
+    
     # Показываем информацию о текущем пользователе
     st.sidebar.subheader("Информация о пользователе")
     st.sidebar.info(f"""
     **Пользователь**: {st.session_state.current_user['full_name']}  
     **Роль**: {st.session_state.current_user['role'].capitalize()}
     """)
-
+    
     # Кнопка выхода из системы
     if st.sidebar.button("Выйти из системы"):
         st.session_state.authenticated = False
         st.session_state.current_user = None
         st.rerun()
-
+    
     if not st.session_state.components_initialized and not st.session_state.error_state:
         with st.spinner("Инициализация системы..."):
             components = get_components()
@@ -341,7 +403,6 @@ def chat_page():
     if user_input:
         handle_user_input(user_input)
 
-
 def change_model(model_name):
     # Логгирование изменения модели
     import logging
@@ -352,6 +413,72 @@ def change_model(model_name):
     st.session_state.selected_model = model_name
     st.success(f"Выбрана модель: {model_name.capitalize()}")
 
+def create_standalone_app():
+    """Создает автономную версию приложения без зависимостей"""
+    st.title("1С RAG-ассистент - Вход в систему (Автономный режим)")
+    
+    with st.form("login_form"):
+        username = st.text_input("Имя пользователя")
+        password = st.text_input("Пароль", type="password")
+        submit_button = st.form_submit_button("Войти")
+        
+        if submit_button:
+            # Простая проверка для автономного режима
+            if username in USERS and verify_password(username, password):
+                st.session_state.authenticated = True
+                st.session_state.current_user = {
+                    "username": username,
+                    "role": USERS[username]["role"],
+                    "full_name": USERS[username]["full_name"]
+                }
+                st.success(f"Добро пожаловать, {USERS[username]['full_name']}!")
+                st.rerun()
+            else:
+                st.error("Неверное имя пользователя или пароль")
+    
+    # Показываем список доступных тестовых пользователей
+    with st.expander("Доступные тестовые аккаунты"):
+        st.markdown("""
+        | Имя пользователя | Пароль | Роль |
+        | ---------------- | ------ | ---- |
+        | admin | admin123 | Администратор |
+        | user1 | user123 | Пользователь |
+        | user2 | user234 | Пользователь |
+        | manager | manager123 | Менеджер |
+        """)
+    
+    if st.session_state.authenticated:
+        st.write(f"Вы вошли как: {st.session_state.current_user['full_name']}")
+        
+        # Простой интерфейс чата
+        st.subheader("Простой чат (автономный режим)")
+        user_input = st.text_input("Введите ваш вопрос:")
+        
+        if user_input:
+            st.session_state.chat_history.append({
+                "role": "user",
+                "content": user_input,
+                "user": st.session_state.current_user["username"]
+            })
+            
+            # Простой ответ без обращения к компонентам
+            st.session_state.chat_history.append({
+                "role": "assistant",
+                "content": "Это автономный режим. Компоненты RAG не доступны, но вы можете тестировать интерфейс входа.",
+                "chunks": [],
+                "images": []
+            })
+            
+            # Отображаем сообщения
+            for message in st.session_state.chat_history:
+                with st.chat_message(message["role"]):
+                    st.write(message["content"])
+        
+        # Кнопка выхода
+        if st.button("Выйти из системы"):
+            st.session_state.authenticated = False
+            st.session_state.current_user = None
+            st.rerun()
 
 def main():
     # Получаем логгер
@@ -359,12 +486,26 @@ def main():
     logger = logging.getLogger("streamlit_app")
 
     logger.info("Запуск приложения")
-
+    
+    # Проверяем наличие необходимых зависимостей
+    missing_dependencies = []
+    if OpenAI is None:
+        missing_dependencies.append("openai")
+    if anthropic is None:
+        missing_dependencies.append("anthropic")
+        
+    # Если критичные зависимости отсутствуют, запускаем автономный режим
+    if missing_dependencies:
+        st.warning(f"Отсутствуют необходимые зависимости: {', '.join(missing_dependencies)}")
+        st.info("Запуск в автономном режиме (только функция входа/выхода)")
+        create_standalone_app()
+        return
+    
     # Проверяем, аутентифицирован ли пользователь
     if not st.session_state.authenticated:
         login_user()
         return
-
+    
     # Если пользователь аутентифицирован, показываем основной интерфейс
     st.sidebar.title("1С RAG-ассистент")
 
@@ -402,7 +543,7 @@ def main():
     if st.session_state.current_user["role"] == "admin":
         st.sidebar.divider()
         st.sidebar.subheader("Панель администратора")
-
+        
         with st.sidebar.expander("Список пользователей"):
             for username, user_data in USERS.items():
                 st.markdown(f"**{user_data['full_name']}** ({username})")
